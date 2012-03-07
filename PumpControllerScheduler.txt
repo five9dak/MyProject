@@ -1,0 +1,25 @@
+Pressure Controller Frequency 100hz
+read the sensor
+convert the sensor bit to PSI
+ensure gPressurePSI is not less than zero for jitter
+read the user input (disired duty or desired pressure)
+transform ADC 0-1023 to 0-100 duty cycle int
+check the max pressure isn't exceeded
+change the desired duty cycle with kP loop
+linearize the snow stageII controll with EEPROM lookup table
+write the PWM output register
+
+Fastest readout frequency (lcd, serial, SD) 10hz
+read the system voltage
+convert to float
+convert the output PWM to average analog voltage (float)
+calculate the pump controller (pump motor) duty cycle
+get the DateTime from the RTC
+print stuff to the sd card buffer and serial terminal if echo serial is 1
+
+
+LCD frequency 5hz
+move the cursors and print display variables
+(labels are from setup)
+flush SD card related ram locations to card
+
