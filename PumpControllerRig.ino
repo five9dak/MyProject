@@ -6,41 +6,43 @@
 
 //include EEPROM library
 #include <EEPROM.h>
-
 //include libaries for the RTC to talk over i2c 
 #include <Wire.h>
 #include "RTClib.h"
-// define the Real Time Clock object
-RTC_DS1307 RTC; 
-
 //include the SD library
 #include <SD.h>
-//set the hardware chip select pin for the adafruit dataloggershield
-//must be left as an output or the SD library
-//functions will not work.
-const int chipSelect = 10;
-// the logging file
-File logfile;
-
 //include the LCD library
 #include <LiquidCrystal.h>
-// initialize the lcd with the numbers of the interface pins
-LiquidCrystal lcd(8, 7, 5, 4, A3, 2);
+//include the TimedAction library for event scheduling
+#include <TimedAction.h>
 
+
+// initialize the Real Time Clock object
+RTC_DS1307 RTC; 
+// initialize the logging file object
+File logfile;
+// initialize the lcd object with the numbers of the interface pins
+LiquidCrystal lcd(8, 7, 5, 4, A3, 2);
+// initilize the pressure control schedule object
+TimedAction pressureControlEvent = TimedAction(10,pressureControl); 
+// initilize the fast display schedule object, SD buffer and Serial terminal
+TimedAction fastDisplayEvent = TimedAction(100,fastDisplay); 
+// initilize the slow display schedule object, LCD and SD flush
+TimedAction slowDisplayEvent = TimedAction(200,slowDisplay); 
+
+//Definitions
 //data logger defines
 #define ECHO_TO_SERIAL   1 // echo data to serial port
 #define WAIT_TO_START    1 // Wait for serial input in setup()
 // how many milliseconds between grabbing data and logging it. 1000 ms is once a second
 #define LOG_INTERVAL  1000 // mills between entries (reduce to take more/faster data)
-
 // how many milliseconds before writing the logged data permanently to disk
 // set it to the LOG_INTERVAL to write each time (safest)
 // set it to 10*LOG_INTERVAL to write all data every 10 datareads, you could lose up to 
 // the last 10 reads if power is lost but it uses less power and is much faster!
 #define SYNC_INTERVAL 1000 // mills between calls to flush() - to write data to the card
-uint32_t syncTime = 0; // time of last sync()
 
-// other pin definitions
+// constant declaration, including pin assignments
 const int cBackLightPin = 6;  // 2n2222a transistor driving LCD backlight LED
 const int cPressurePin = A0; // Pressure sensor input pin. 1-5v 0-250psi
 const int cPumpPin = 9; //connected 212 Fc 2 pole RC low pass into snow stgII controller
@@ -49,8 +51,11 @@ const int cUserPin = A1; //connected to 0-2k pot, currently this sets the open l
 const int cVoltageDividerPin = A2; //connected to voltage divider for 12v raw
 const int cMaxPressure = 120; //maximum system pressure limit in PSI
 const int cLimitGain = 15; //gain for max pressure limiting
+const int chipSelect = 10;//set the hardware chip select pin for the adafruit dataloggershield
+//must be left as an output or the SD library
+//functions will not work.
 
-// variable definitions
+// global variable declaration
 float gSysVoltage = 0; //float value of system voltage
 int gPumpDuty; //actual 0-100% pump duty cycle output
 int gPressurePSI = 0; //system pressure in PSI
@@ -60,134 +65,49 @@ int gDesiredDutyCycle = 0; // desired duty cycle
 int gDutyCycleBit = 0; //duty cycle bits after linearization 0-255
 float gOutVoltage = 0;  //pump controller average analog voltage for display only
 
-
 //linearizes the snow stage II pump controller
 //pass a desiredDuty to dutyCycle function and it
 //returns the 8bit analogValue value suitable for analogWrite function
 //requires EEPROM sketch to populate addresses 15-70
-int dutyCycle(int desiredDuty)
+int dutyCycle(int pDesiredDuty)
 {
-  int analogValue = 0;
-  if(desiredDuty < 15){analogValue = 0;}
-  else if(desiredDuty > 70){analogValue = 255;}
+  int vAnalogValue = 0;
+  if(pDesiredDuty < 15){vAnalogValue = 0;}
+  else if(pDesiredDuty > 70){vAnalogValue = 255;}
   else
-  analogValue = EEPROM.read(desiredDuty);
-  return analogValue;
+  vAnalogValue = EEPROM.read(pDesiredDuty);
+  return vAnalogValue;
 }
 
-//calculate actual output duty cycle for display
-int pumpDC(int desiredDuty2)
+//calculate actual output duty cycle for display, datalogging
+int pumpDC(int pDesiredDuty)
 {
-  int value;
-  if(desiredDuty2 < 15){value = 0;}
-  else if(desiredDuty2 > 70){value = 100;}
-  else value = desiredDuty2;
-  return value;
+  int vDisplayedDutyCycle;
+  if(pDesiredDuty < 15){vDisplayedDutyCycle = 0;}
+  else if(pDesiredDuty > 70){vDisplayedDutyCycle = 100;}
+  else vDisplayedDutyCycle = pDesiredDuty;
+  return vDisplayedDutyCycle;
 }
 
-//error reporting function
+//error reporting function- can be re-used 
 void error(char *str)
 {
   Serial.print("error: ");
   Serial.println(str);
-    // red LED indicates error
-  //digitalWrite(redLEDpin, HIGH);
-  while(1);
+  while(1); //halts execution on errors
 }
 
-//run once
-void setup() 
-{
-  // set A3 as an output for LCD wiring
-  pinMode(A3, OUTPUT);
-  // set 3 as an output for relay/solenoid transistor
-  pinMode(3, OUTPUT);
-  // open relay, close the solenoid
-  // ensures the transistor does not see interediate voltage
-  digitalWrite(cRelayPin, LOW);
-  
-  // set up the LCD's number of columns and rows: 
-  lcd.begin(20, 4);
-  // turn on the backlight and set brightness
-  analogWrite(cBackLightPin,125);
-  //clear the screen
-  lcd.clear();
-  // Print pressure PSI label to the LCD
-  lcd.setCursor(0,4);
-  lcd.print("  PSI");   
-  // Print the system volts label to the LCD
-  lcd.setCursor(0,0);
-  lcd.print(" Vsys"); 
-  // Print output volts label to the LCD
-  lcd.setCursor(0,2);
-  lcd.print(" Vout"); 
-  // Print duty cycle label to the LCD
-  lcd.setCursor(0,1);
-  lcd.print("DCout");   
-  
-  //initialize serial terminal at 9600 baud
-  Serial.begin(9600);
-  Serial.println();
-  
-  //wait for the user if WAIT_TO_STATRT define is set
-  #if WAIT_TO_START
-  Serial.println("Type any character to start");
-  while (!Serial.available());
-  #endif //WAIT_TO_START
-  
-  // print initialize the SD card
-  Serial.print("Initializing SD card...");
-  // make sure that the default chip select pin is set to
-  // output, even if you don't use it:
-  pinMode(10, OUTPUT);
-  
-  // see if the card is present and can be initialized:
-  if (!SD.begin(chipSelect)) {
-    error("Card failed, or not present");
-  }
-  Serial.println("card initialized.");
-  
-  // create a new file
-  char filename[] = "LOGGER00.CSV";
-  for (uint8_t i = 0; i < 100; i++) {
-    filename[6] = i/10 + '0';
-    filename[7] = i%10 + '0';
-    if (! SD.exists(filename)) {
-      // only open a new file if it doesn't exist
-      logfile = SD.open(filename, FILE_WRITE); 
-      break;  // leave the loop!
-    }
-  }
-  //throw error if logger can't create file
-  if (! logfile) {
-    error("couldnt create file");
-  }
-  //report file being logged to
-  Serial.print("Logging to: ");
-  Serial.println(filename);
-   
-   //connect to the RTC
-   Wire.begin();  
-   if (!RTC.begin())
-   {
-   logfile.println("RTC failed");
-   #if ECHO_TO_SERIAL
-   Serial.println("RTC failed");
-   #endif  //ECHO_TO_SERIAL
-   }
-  
-  //print the log header to the SD file and serial
-  logfile.println("millis,timestamp,time,voltage,duty cycle,pressure");    
-  #if ECHO_TO_SERIAL
-  Serial.println("millis,timestampe,time,voltage,duty cycle,pressure");
-  #endif
-   
-  //energize relay, open solenoid
-  digitalWrite(cRelayPin, HIGH);
-}
-
-//loop
-void loop()
+//Pressure Controller Frequency 100hz
+//read the sensor
+//convert the sensor bit to PSI
+//ensure gPressurePSI is not less than zero for jitter
+//read the user input (disired duty or desired pressure)
+//transform ADC 0-1023 to 0-100 duty cycle int
+//check the max pressure isn't exceeded
+//change the desired duty cycle with kP loop
+//linearize the snow stageII controll with EEPROM lookup table
+//write the PWM output register
+void pressureControl()
 {
   //read pressure sensor
   gPressureSensorBit = analogRead(cPressurePin);
@@ -197,8 +117,6 @@ void loop()
   gPressurePSI=gPressureShiftedBit*0.31313; //62.5psi per volt,* .0049 volt per bit *(5/4.89) verf
   //make sure pressure doesn't jitter below 0
   if(gPressurePSI <= 0){gPressurePSI=0;};
-  //measure system voltage
-  gSysVoltage= analogRead(cVoltageDividerPin)*0.0238;
   //measure the user input desired duty cycle
   gDesiredDutyCycle= map(analogRead(cUserPin),0,1023,0,100);
   //check that pump pressure max isn't exceeded
@@ -210,32 +128,28 @@ void loop()
   //linearize snow stage II pump controller with dutyCycle function.
   gDutyCycleBit = dutyCycle(gDesiredDutyCycle); 
   //output pump bits to pump controller
-  analogWrite(cPumpPin,gDutyCycleBit); 
+  analogWrite(cPumpPin,gDutyCycleBit);
+}
+
+//Fastest readout frequency (lcd, serial, SD) 10hz
+//read the system voltage
+//convert to float
+//convert the output PWM to average analog voltage (float)
+//calculate the pump controller (pump motor) duty cycle
+//get the DateTime from the RTC
+//print stuff to the sd card buffer and serial terminal if echo serial is 1
+void fastDisplay()
+{
+  //measure system voltage
+  gSysVoltage= analogRead(cVoltageDividerPin)*0.0238;
   //convert to output to volts 
   gOutVoltage = gDutyCycleBit*0.0192;
   //calculate pump duty
   gPumpDuty = pumpDC(gDesiredDutyCycle);
-  // print the pressure
-  lcd.setCursor(6,3);
-  lcd.print(gPressurePSI);
-  lcd.print("  ");
-  // print the system voltage
-  lcd.setCursor(6,0);
-  lcd.print(gSysVoltage);
-  lcd.print("  ");
-  // print the average analog output voltage to the controller
-  lcd.setCursor(6,2);
-  lcd.print(gOutVoltage); 
-  lcd.print("  ");
-  // print the duty cycle outputted to the pump controller
-  lcd.setCursor(6,1);
-  lcd.print(gPumpDuty);
-  lcd.print("  ");
-  
   //datalogger section
   DateTime now;
   // delay for the amount of time we want between readings
-  delay((LOG_INTERVAL -1) - (millis() % LOG_INTERVAL));
+  //delay((LOG_INTERVAL -1) - (millis() % LOG_INTERVAL));
   // log milliseconds since starting
   uint32_t m = millis();
   logfile.print(m);           // milliseconds since start
@@ -299,13 +213,123 @@ void loop()
   Serial.println();
   #endif //ECHO_TO_SERIAL
   
-   // Now we write data to disk! Don't sync too often - requires 2048 bytes of I/O to SD card
-  // which uses a bunch of power and takes time
-  if ((millis() - syncTime) < SYNC_INTERVAL) return;
-  syncTime = millis();
+}
+
+//LCD frequency 5hz
+//move the cursors and print display variables
+//(labels are from setup)
+//flush SD card related ram locations to card
+void slowDisplay()
+{
+  // print the pressure
+  lcd.setCursor(6,3);
+  lcd.print(gPressurePSI);
+  lcd.print("  ");
+  // print the system voltage
+  lcd.setCursor(6,0);
+  lcd.print(gSysVoltage);
+  lcd.print("  ");
+  // print the average analog output voltage to the controller
+  lcd.setCursor(6,2);
+  lcd.print(gOutVoltage); 
+  lcd.print("  ");
+  // print the duty cycle outputted to the pump controller
+  lcd.setCursor(6,1);
+  lcd.print(gPumpDuty);
+  lcd.print("  ");
   
   // syncing data to the card & updating FAT!
   logfile.flush();
-
-  
 }
+
+//This code runs once at startup
+void setup() 
+{
+  pinMode(A3, OUTPUT); // set A3 as an output for LCD wiring
+  pinMode(3, OUTPUT); // set 3 as an output for relay/solenoid transistor
+  pinMode(10, OUTPUT); // chip select for SD card, required for library to function
+  
+  // open relay, close the solenoid
+  // ensures the transistor does not see intermediate voltage
+  digitalWrite(cRelayPin, LOW);
+   // set up the LCD's number of columns and rows: 
+  lcd.begin(20, 4);
+  // turn on the backlight and set brightness
+  analogWrite(cBackLightPin,125);
+  lcd.clear(); //clear the screen
+  lcd.setCursor(0,4);
+  lcd.print("  PSI"); // Print pressure PSI label to the LCD
+  lcd.setCursor(0,0);
+  lcd.print(" Vsys"); // Print the system volts label to the LCD
+  lcd.setCursor(0,2);
+  lcd.print(" Vout"); // Print output volts label to the LCD
+  lcd.setCursor(0,1);
+  lcd.print("DCout");   // Print duty cycle label to the LCD
+  
+  //initialize serial terminal at 9600 baud
+  Serial.begin(9600);
+  Serial.println();
+  
+  //wait for the user if WAIT_TO_STATRT define is set
+  #if WAIT_TO_START
+  Serial.println("Type any character to start");
+  while (!Serial.available());
+  #endif //WAIT_TO_START
+  
+  // print initialize the SD card to the serial terminal
+  Serial.print("Initializing SD card...");
+  
+  // see if the card is present and can be initialized:
+  if (!SD.begin(chipSelect)) {
+    error("Card failed, or not present");
+  }
+  Serial.println("card initialized.");
+  
+  // create a new file
+  char filename[] = "LOGGER00.CSV";
+  for (uint8_t i = 0; i < 100; i++) {
+    filename[6] = i/10 + '0';
+    filename[7] = i%10 + '0';
+    if (! SD.exists(filename)) {
+      // only open a new file if it doesn't exist
+      logfile = SD.open(filename, FILE_WRITE); 
+      break;  // leave the loop!
+    }
+  }
+  //throw error if logger can't create file
+  if (! logfile) {
+    error("couldnt create file");
+  }
+  //report file being logged to
+  Serial.print("Logging to: ");
+  Serial.println(filename);
+   
+  //connect to the RTC
+  Wire.begin();  
+  if (!RTC.begin())
+  {
+  logfile.println("RTC failed");
+  #if ECHO_TO_SERIAL
+  Serial.println("RTC failed");
+  #endif  //ECHO_TO_SERIAL
+  }
+  
+  //print the log header to the SD file and serial
+  logfile.println("millis,timestamp,time,voltage,duty cycle,pressure");    
+  #if ECHO_TO_SERIAL
+  Serial.println("millis,timestampe,time,voltage,duty cycle,pressure");
+  #endif
+   
+  //energize relay, open solenoid
+  digitalWrite(cRelayPin, HIGH);
+}
+
+void loop()
+{
+  pressureControlEvent.check();
+  fastDisplayEvent.check();
+  slowDisplayEvent.check();
+}
+
+
+
