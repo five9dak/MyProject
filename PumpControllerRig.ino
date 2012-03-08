@@ -18,7 +18,6 @@
 //include the TimedAction library for event scheduling
 #include <TimedAction.h>
 
-
 // initialize the Real Time Clock object
 RTC_DS1307 RTC; 
 // initialize the logging file object
@@ -32,17 +31,10 @@ TimedAction fastDisplayEvent = TimedAction(100,fastDisplay);
 // initilize the slow display schedule object, LCD and SD flush
 TimedAction slowDisplayEvent = TimedAction(200,slowDisplay); 
 
-//Definitions
-//data logger defines
+// Definitions
+//data logger compile time defines
 #define ECHO_TO_SERIAL   1 // echo data to serial port
 #define WAIT_TO_START    1 // Wait for serial input in setup()
-// how many milliseconds between grabbing data and logging it. 1000 ms is once a second
-#define LOG_INTERVAL  1000 // mills between entries (reduce to take more/faster data)
-// how many milliseconds before writing the logged data permanently to disk
-// set it to the LOG_INTERVAL to write each time (safest)
-// set it to 10*LOG_INTERVAL to write all data every 10 datareads, you could lose up to 
-// the last 10 reads if power is lost but it uses less power and is much faster!
-#define SYNC_INTERVAL 1000 // mills between calls to flush() - to write data to the card
 
 // constant declaration, including pin assignments
 const int cBackLightPin = 6;  // 2n2222a transistor driving LCD backlight LED
@@ -58,11 +50,9 @@ const int chipSelect = 10;//set the hardware chip select pin for the adafruit da
 //functions will not work.
 
 // global variable declaration
-float gSysVoltage = 0; //float value of system voltage
-int gPumpDuty; //actual 0-100% pump duty cycle output
-int gPressurePSI = 0; //system pressure in PSI
-int gPressureSensorBit = 0; //ADC bit from pressure sensor, 0-1023
-int gPressureShiftedBit = 0; //ADC bit after subtracting 1v offset
+float gSysVoltage = readVoltage(); //float value of system voltage
+int gPumpDuty=0; //actual 0-100% pump duty cycle output
+int gPressurePSI = readPressure(); //system pressure in PSI
 int gDesiredDutyCycle = 0; // desired duty cycle
 int gDutyCycleBit = 0; //duty cycle bits after linearization 0-255
 float gOutVoltage = 0;  //pump controller average analog voltage for display only
@@ -91,6 +81,32 @@ int pumpDC(int pDesiredDuty)
   return vDisplayedDutyCycle;
 }
 
+//read the pressure sensor
+int readPressure()
+{
+  int vPressureSensorBit;
+  int vPressureShiftedBit;
+  int vPressurePSI;
+  //read pressure sensor
+  vPressureSensorBit = analogRead(cPressurePin);
+  //offest 1 volt for 1-4v range
+  vPressureShiftedBit = vPressureSensorBit - 200;
+  //convert shifted bit to pressure in PSI
+  vPressurePSI=vPressureShiftedBit*0.31313; //62.5psi per volt,* .0049 volt per bit *(5/4.89) verf
+  //make sure pressure doesn't jitter below 0
+  if(vPressurePSI <= 0){vPressurePSI=0;};
+  return vPressurePSI;
+}
+
+//read the system voltage
+float readVoltage()
+{
+ float vSysVoltage;
+ //measure system voltage
+ vSysVoltage= analogRead(cVoltageDividerPin)*0.0238;
+ return vSysVoltage;
+}
+
 //error reporting function- can be re-used 
 void error(char *str)
 {
@@ -111,14 +127,8 @@ void error(char *str)
 //write the PWM output register
 void pressureControl()
 {
-  //read pressure sensor
-  gPressureSensorBit = analogRead(cPressurePin);
-  //offest 1 volt for 1-4v range
-  gPressureShiftedBit = gPressureSensorBit - 200;
-  //convert shifted bit to pressure in PSI
-  gPressurePSI=gPressureShiftedBit*0.31313; //62.5psi per volt,* .0049 volt per bit *(5/4.89) verf
-  //make sure pressure doesn't jitter below 0
-  if(gPressurePSI <= 0){gPressurePSI=0;};
+  //read the pressure sensor
+  gPressurePSI=readPressure();
   //measure the user input desired duty cycle
   gDesiredDutyCycle= map(analogRead(cUserPin),0,1023,0,100);
   //check that pump pressure max isn't exceeded
@@ -143,15 +153,13 @@ void pressureControl()
 void fastDisplay()
 {
   //measure system voltage
-  gSysVoltage= analogRead(cVoltageDividerPin)*0.0238;
+  gSysVoltage = readVoltage();  
   //convert to output to volts 
   gOutVoltage = gDutyCycleBit*0.0192;
   //calculate pump duty
   gPumpDuty = pumpDC(gDesiredDutyCycle);
   //datalogger section
   DateTime now;
-  // delay for the amount of time we want between readings
-  //delay((LOG_INTERVAL -1) - (millis() % LOG_INTERVAL));
   // log milliseconds since starting
   uint32_t m = millis();
   logfile.print(m);           // milliseconds since start
