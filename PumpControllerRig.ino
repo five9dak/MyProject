@@ -1,3 +1,9 @@
+// variable prefixes
+// c: constant
+// g: global
+// p: parameter
+// v: local variable
+
 //include EEPROM library
 #include <EEPROM.h>
 
@@ -35,24 +41,25 @@ LiquidCrystal lcd(8, 7, 5, 4, A3, 2);
 uint32_t syncTime = 0; // time of last sync()
 
 // other pin definitions
-int backLightPin = 6;  // 2n2222a transistor driving LCD backlight LED
-int pressurePin = A0; // Pressure sensor input pin. 1-5v 0-250psi
-int pumpPin = 9; //connected 212 Fc 2 pole RC low pass into snow stgII controller
-int relayPin = 3; //connected to logic level FET, weak pulldown, fires relay/solenoid
-int userPin = A1; //connected to 0-2k pot, currently this sets the open loop duty
-int sysVoltPin = A2; //connected to voltage divider for 12v raw
+const int cBackLightPin = 6;  // 2n2222a transistor driving LCD backlight LED
+const int cPressurePin = A0; // Pressure sensor input pin. 1-5v 0-250psi
+const int cPumpPin = 9; //connected 212 Fc 2 pole RC low pass into snow stgII controller
+const int cRelayPin = 3; //connected to logic level FET, weak pulldown, fires relay/solenoid
+const int cUserPin = A1; //connected to 0-2k pot, currently this sets the open loop duty
+const int cVoltageDividerPin = A2; //connected to voltage divider for 12v raw
+const int cMaxPressure = 120; //maximum system pressure limit in PSI
+const int cLimitGain = 15; //gain for max pressure limiting
 
 // variable definitions
-float sysVolt = 0; //float value of system voltage
-int pumpDuty; //actual 0-100% pump duty cycle output
-int pressurePSI = 0; //system pressure in PSI
-int pressureBit = 0; //used in pressure scaling
-int pressureShiftedBit = 0; //used in pressure scaling
-int desiredDC = 0; // desired duty cycle
-int dcBit = 0; //dc bits after linearization
-float outVolts = 0;  //pump controll voltage for display
-int maxPressure = 120; //psi
-int limitGain = 15; //gain for max pressure limiting
+float gSysVoltage = 0; //float value of system voltage
+int gPumpDuty; //actual 0-100% pump duty cycle output
+int gPressurePSI = 0; //system pressure in PSI
+int gPressureSensorBit = 0; //ADC bit from pressure sensor, 0-1023
+int gPressureShiftedBit = 0; //ADC bit after subtracting 1v offset
+int gDesiredDutyCycle = 0; // desired duty cycle
+int gDutyCycleBit = 0; //duty cycle bits after linearization 0-255
+float gOutVoltage = 0;  //pump controller average analog voltage for display only
+
 
 //linearizes the snow stage II pump controller
 //pass a desiredDuty to dutyCycle function and it
@@ -97,12 +104,12 @@ void setup()
   pinMode(3, OUTPUT);
   // open relay, close the solenoid
   // ensures the transistor does not see interediate voltage
-  digitalWrite(relayPin, LOW);
+  digitalWrite(cRelayPin, LOW);
   
   // set up the LCD's number of columns and rows: 
   lcd.begin(20, 4);
   // turn on the backlight and set brightness
-  analogWrite(backLightPin,125);
+  analogWrite(cBackLightPin,125);
   //clear the screen
   lcd.clear();
   // Print pressure PSI label to the LCD
@@ -176,53 +183,53 @@ void setup()
   #endif
    
   //energize relay, open solenoid
-  digitalWrite(relayPin, HIGH);
+  digitalWrite(cRelayPin, HIGH);
 }
 
 //loop
 void loop()
 {
   //read pressure sensor
-  pressureBit = analogRead(pressurePin);
+  gPressureSensorBit = analogRead(cPressurePin);
   //offest 1 volt for 1-4v range
-  pressureShiftedBit = pressureBit - 200;
+  gPressureShiftedBit = gPressureSensorBit - 200;
   //convert shifted bit to pressure in PSI
-  pressurePSI=pressureShiftedBit*0.31313; //62.5psi per volt,* .0049 volt per bit *(5/4.89) verf
+  gPressurePSI=gPressureShiftedBit*0.31313; //62.5psi per volt,* .0049 volt per bit *(5/4.89) verf
   //make sure pressure doesn't jitter below 0
-  if(pressurePSI <= 0){pressurePSI=0;};
+  if(gPressurePSI <= 0){gPressurePSI=0;};
   //measure system voltage
-  sysVolt= analogRead(sysVoltPin)*0.0238;
+  gSysVoltage= analogRead(cVoltageDividerPin)*0.0238;
   //measure the user input desired duty cycle
-  desiredDC= map(analogRead(userPin),0,1023,0,100);
+  gDesiredDutyCycle= map(analogRead(cUserPin),0,1023,0,100);
   //check that pump pressure max isn't exceeded
-  if(pressurePSI > maxPressure)
+  if(gPressurePSI > cMaxPressure)
     {
-      desiredDC=desiredDC-limitGain*(pressurePSI-maxPressure);
-      if(desiredDC<15){desiredDC=15;}
+      gDesiredDutyCycle=gDesiredDutyCycle-cLimitGain*(gPressurePSI-cMaxPressure);
+      if(gDesiredDutyCycle<15){gDesiredDutyCycle=15;}
     }
   //linearize snow stage II pump controller with dutyCycle function.
-  dcBit = dutyCycle(desiredDC); 
+  gDutyCycleBit = dutyCycle(gDesiredDutyCycle); 
   //output pump bits to pump controller
-  analogWrite(pumpPin,dcBit); 
+  analogWrite(cPumpPin,gDutyCycleBit); 
   //convert to output to volts 
-  outVolts = dcBit*0.0192;
+  gOutVoltage = gDutyCycleBit*0.0192;
   //calculate pump duty
-  pumpDuty = pumpDC(desiredDC);
+  gPumpDuty = pumpDC(gDesiredDutyCycle);
   // print the pressure
   lcd.setCursor(6,3);
-  lcd.print(pressurePSI);
+  lcd.print(gPressurePSI);
   lcd.print("  ");
-  // print the sysVolt
+  // print the system voltage
   lcd.setCursor(6,0);
-  lcd.print(sysVolt);
+  lcd.print(gSysVoltage);
   lcd.print("  ");
-  // print the outVolts
+  // print the average analog output voltage to the controller
   lcd.setCursor(6,2);
-  lcd.print(outVolts); 
+  lcd.print(gOutVoltage); 
   lcd.print("  ");
-  // print the pumpDuty
+  // print the duty cycle outputted to the pump controller
   lcd.setCursor(6,1);
-  lcd.print(pumpDuty);
+  lcd.print(gPumpDuty);
   lcd.print("  ");
   
   //datalogger section
@@ -276,19 +283,19 @@ void loop()
 
   //log the data
   logfile.print(", ");    
-  logfile.print(sysVolt);
+  logfile.print(gSysVoltage);
   logfile.print(", ");    
-  logfile.print(pumpDuty);
+  logfile.print(gPumpDuty);
   logfile.print(", ");    
-  logfile.print(pressurePSI);
+  logfile.print(gPressurePSI);
   logfile.println();
   #if ECHO_TO_SERIAL
   Serial.print(", ");   
-  Serial.print(sysVolt);
+  Serial.print(gSysVoltage);
   Serial.print(", ");    
-  Serial.print(pumpDuty);
+  Serial.print(gPumpDuty);
   Serial.print(", ");    
-  Serial.print(pressurePSI);
+  Serial.print(gPressurePSI);
   Serial.println();
   #endif //ECHO_TO_SERIAL
   
