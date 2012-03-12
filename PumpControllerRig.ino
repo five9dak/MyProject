@@ -1,4 +1,4 @@
-// version dated 3/7/2012
+// version dated 3/12/2012
 
 // variable prefixes
 // c: constant
@@ -25,15 +25,15 @@ File logfile;
 // initialize the lcd object with the numbers of the interface pins
 LiquidCrystal lcd(8, 7, 5, 4, A3, 2);
 // initilize the pressure control schedule object
-TimedAction pressureControlEvent = TimedAction(10,pressureControl); 
+TimedAction pressureControlEvent = TimedAction(20,pressureControl); 
 // initilize the fast display schedule object, SD buffer and Serial terminal
-TimedAction fastDisplayEvent = TimedAction(100,fastDisplay); 
+TimedAction fastDisplayEvent = TimedAction(50,fastDisplay); 
 // initilize the slow display schedule object, LCD and SD flush
 TimedAction slowDisplayEvent = TimedAction(200,slowDisplay); 
 
 // Definitions
 //data logger compile time defines
-#define ECHO_TO_SERIAL   1 // echo data to serial port
+#define ECHO_TO_SERIAL   0 // echo data to serial port
 #define WAIT_TO_START    1 // Wait for serial input in setup()
 
 // constant declaration, including pin assignments
