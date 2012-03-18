@@ -1,6 +1,4 @@
-// version dated 3/15/2012
-
-// not tested on rig, need to add datalogging and display variables for closed loop mode for more bench testing
+// version dated 3/17/2012
 
 // variable prefixes
 // c: constant
@@ -10,10 +8,10 @@
 
 // Definitions
 //data logger compile time defines
-#define OPEN_LOOP        1 // Open loop pressure control mode
-#define CLOSED_LOOP      0 // Closed loop pressure control mode
+#define OPEN_LOOP        0 // Open loop pressure control mode
+#define CLOSED_LOOP      1 // Closed loop pressure control mode
 #define ECHO_TO_SERIAL   0 // echo data to serial port
-#define WAIT_TO_START    1 // Wait for serial input in setup()
+#define WAIT_TO_START    0 // Wait for serial input in setup()
 
 //include EEPROM library
 #include <EEPROM.h>
@@ -50,7 +48,7 @@ double gDesiredDutyCycle = 0; // desired duty cycle, user input or output of PID
 double gDesiredPressure = 0; // desired pressure, user input 
 int gDutyCycleBit = 0; //duty cycle bits after linearization 0-255
 float gOutVoltage = 0;  //pump controller average analog voltage for display only
-double kP = 4; //PID tuning constant, proportional
+double kP = 5 ; //PID tuning constant, proportional
 double kI = 0; //PID tuning constant, integral
 double kD = 0; //PID tuning constant, derivative
 
@@ -62,19 +60,19 @@ File logfile;
 LiquidCrystal lcd(8, 7, 5, 4, A3, 2);
 // initilize the open loop pressure control schedule object
 #if OPEN_LOOP
-TimedAction openLoopEvent = TimedAction(10,openLoopControl); 
+TimedAction openLoopEvent = TimedAction(20,openLoopControl); 
 #endif
 // initilize the PID object, tuning parameters, sample time
 #if CLOSED_LOOP
-TimedAction closedLoopEvent_1 = TimedAction(10,closedLoopControl_1);
-TimedAction closedLoopEvent_2 = TimedAction(10,closedLoopControl_2); 
+TimedAction closedLoopEvent_1 = TimedAction(20,closedLoopControl_1);
+TimedAction closedLoopEvent_2 = TimedAction(20,closedLoopControl_2); 
 // initilize the PID object and tuning parameters
 PID myPID(&gPressurePSI,&gDesiredDutyCycle,&gDesiredPressure,kP,kI,kD,DIRECT);
 #endif
 // initilize the fast display schedule object, SD buffer and Serial terminal
-TimedAction fastDisplayEvent = TimedAction(10,fastDisplay); 
+TimedAction fastDisplayEvent = TimedAction(20,fastDisplay); 
 // initilize the slow display schedule object, LCD and SD flush
-TimedAction slowDisplayEvent = TimedAction(40,slowDisplay); 
+TimedAction slowDisplayEvent = TimedAction(200,slowDisplay); 
 
 //linearizes the snow stage II pump controller
 //pass a desiredDuty to dutyCycle function and it
@@ -183,7 +181,7 @@ void closedLoopControl_2()
   //linearize snow stage II pump controller with dutyCycle function.
   gDutyCycleBit = dutyCycle(gDesiredDutyCycle); 
   //output pump bits to pump controller
-  analogWrite(cPumpPin,gDutyCycleBit); //should probably be moved to after myPID.computer()
+  analogWrite(cPumpPin,gDutyCycleBit); //should probably be moved to after myPID.compute()
 }
 
 //Fastest readout frequency (lcd, serial, SD) 10hz
@@ -253,7 +251,9 @@ void fastDisplay()
   logfile.print(gSysVoltage);
   logfile.print(", ");    
   logfile.print(gPumpDuty);
-  logfile.print(", ");    
+  logfile.print(", ");
+  logfile.print(gDesiredPressure);
+  logfile.print(", ");  
   logfile.print(gPressurePSI);
   logfile.println();
   #if ECHO_TO_SERIAL
@@ -261,6 +261,8 @@ void fastDisplay()
   Serial.print(gSysVoltage);
   Serial.print(", ");    
   Serial.print(gPumpDuty);
+  Serial.print(", ");  
+  Serial.print(gDesiredPressure);
   Serial.print(", ");    
   Serial.print(gPressurePSI);
   Serial.println();
@@ -274,22 +276,28 @@ void fastDisplay()
 //flush SD card related ram locations to card
 void slowDisplay()
 {
-  // print the pressure
-  lcd.setCursor(6,3);
-  lcd.print(gPressurePSI);
-  lcd.print("  ");
   // print the system voltage
-  lcd.setCursor(6,0);
+  lcd.setCursor(5,0);
   lcd.print(gSysVoltage);
-  lcd.print("  ");
-  // print the average analog output voltage to the controller
-  lcd.setCursor(6,2);
-  lcd.print(gOutVoltage); 
-  lcd.print("  ");
+  //lcd.print(" ");
   // print the duty cycle outputted to the pump controller
-  lcd.setCursor(6,1);
+  lcd.setCursor(5,1);
   lcd.print(gPumpDuty);
   lcd.print("  ");
+  // print the average analog output voltage to the controller
+  lcd.setCursor(5,2);
+  lcd.print(gOutVoltage); 
+  lcd.print("  ");
+  // print the pressure
+  lcd.setCursor(14,0);
+  lcd.print(gPressurePSI);
+  //lcd.print("  ");
+  #if CLOSED_LOOP
+  // print the pressure target
+  lcd.setCursor(14,1);
+  lcd.print(gDesiredPressure);
+  //lcd.print("");
+  #endif
   
   // syncing data to the card & updating FAT!
   logfile.flush();
@@ -310,14 +318,18 @@ void setup()
   // turn on the backlight and set brightness
   analogWrite(cBackLightPin,125);
   lcd.clear(); //clear the screen
-  lcd.setCursor(0,4);
-  lcd.print("  PSI"); // Print pressure PSI label to the LCD
   lcd.setCursor(0,0);
-  lcd.print(" Vsys"); // Print the system volts label to the LCD
-  lcd.setCursor(0,2);
-  lcd.print(" Vout"); // Print output volts label to the LCD
+  lcd.print("Vsys"); // Print the system volts label to the LCD
   lcd.setCursor(0,1);
-  lcd.print("DCout");   // Print duty cycle label to the LCD
+  lcd.print("  DC"); // Print duty cycle label to the LCD
+  lcd.setCursor(0,2);
+  lcd.print("Vout"); // Print output volts label to the LCD
+  lcd.setCursor(10,0);
+  lcd.print("PSI"); // Print pressure PSI label to the LCD
+  lcd.setCursor(10,1);
+  #if CLOSED_LOOP
+  lcd.print("SET");   // Print target PSI label to the LCD
+  #endif
   
   //initialize serial terminal at 9600 baud
   Serial.begin(9600);
@@ -368,15 +380,15 @@ void setup()
   }
   
   //print the log header to the SD file and serial
-  logfile.println("millis,timestamp,time,voltage,duty cycle,pressure");    
+  logfile.println("millis,timestamp,time,voltage,duty cycle,setpoint,pressure");    
   #if ECHO_TO_SERIAL
-  Serial.println("millis,timestampe,time,voltage,duty cycle,pressure");
+  Serial.println("millis,timestamp,time,voltage,duty cycle,setpoint,pressure");
   #endif
    
   //set the PID loop period, output limits
   #if CLOSED_LOOP
   myPID.SetSampleTime(10); 
-  myPID.SetOutputLimits(17,70);
+  myPID.SetOutputLimits(0,100);
   #endif 
    
   //energize relay, open solenoid
